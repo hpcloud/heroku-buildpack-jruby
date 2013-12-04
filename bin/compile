@@ -14,12 +14,17 @@ BIN_DIR=$(cd $(dirname $0); pwd) # absolute path
 BUILD_DIR=$1
 CACHE_DIR=$2
 
+PROFILE_PATH="$BUILD_DIR/.profile.d/jruby.sh"
+
 # Look for JRuby version in Gemfile
 VERSION=`grep ^ruby $BUILD_DIR/Gemfile | sed 's/.*version[^0-9]*\([0-9\.]*\).*/\1/'`
 # Try find preferred Ruby mode in the Gemfile
 MODE=`grep ^ruby $BUILD_DIR/Gemfile | cut -c 7-9`
 
 export JRUBY_OPTS="--$MODE -J-Xmx400m -Xcext.enabled=true -J-XX:+UseCompressedOops -J-noverify"
+
+# We'll need to send these statics to other scripts we `source`.
+export BUILD_DIR CACHE_DIR BIN_DIR PROFILE_PATH
 
 source $BIN_DIR/utils
 
@@ -67,8 +72,8 @@ function download_jruby_and_install_default_gems {
 
 function copy_jruby_to_build {
   puts-step "Vendoring JRuby into slug"
-  cp -ru $CACHE_DIR/jruby-$VERSION $BUILD_DIR/jruby
-  PATH=$BUILD_DIR/jruby/bin:$PATH
+  cp -ru $CACHE_DIR/jruby-$VERSION $BUILD_DIR/.jruby
+  PATH=$BUILD_DIR/.jruby/bin:$PATH
 }
 
 function get_bundle_cache {
@@ -100,26 +105,6 @@ function bundle_install_with_cache {
   get_bundle_cache
   bundle_install
   store_bundle_cache
-}
-
-function install_rails_log_stdout {
-  if [ -f $BUILD_DIR/config/environment.rb ]; then
-    PLUG_DIR=$BUILD_DIR/vendor/plugins/rails_log_stdout
-    mkdir -p $PLUG_DIR
-    cd $PLUG_DIR
-    curl https://github.com/ddollar/rails_log_stdout/tarball/master -s -o - | tar xzf -
-    cd -
-  fi
-}
-
-function install_rails3_server_static_assets {
-  if [ -f $BUILD_DIR/config/application.rb ]; then
-    PLUG_DIR=$BUILD_DIR/vendor/plugins/rails3_server_static_assets
-    mkdir -p $PLUG_DIR
-    cd $PLUG_DIR
-    curl 'https://github.com/pedro/rails3_serve_static_assets/tarball/master' -s -o - | tar xzf -
-    cd -
-  fi
 }
 
 function create_database_yml {
@@ -199,3 +184,10 @@ bundle_install_with_cache
 
 create_database_yml
 precompile_assets
+
+# Set context environment variables.
+set-env PATH '$HOME/.jruby/bin:$PATH'
+set-env RACK_ENV 'production'
+set-env RAILS_ENV 'production'
+set-env JRUBY_OPTS '--$MODE -J-Xmx400m -J-XX:+UseCompressedOops -J-noverify'
+set-default-env LANG en_US.UTF-8
