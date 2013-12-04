@@ -10,16 +10,18 @@ set -e
 # clean up leaking environment
 unset GIT_DIR
 
+BIN_DIR=$(cd $(dirname $0); pwd) # absolute path
 BUILD_DIR=$1
 CACHE_DIR=$2
 
-function indent {
-  c='s/^/       /'
-  case $(uname) in
-    Darwin) sed -l "$c";;
-    *)      sed -u "$c";;
-  esac
-}
+# Look for JRuby version in Gemfile
+VERSION=`grep ^ruby $BUILD_DIR/Gemfile | sed 's/.*version[^0-9]*\([0-9\.]*\).*/\1/'`
+# Try find preferred Ruby mode in the Gemfile
+MODE=`grep ^ruby $BUILD_DIR/Gemfile | cut -c 7-9`
+
+export JRUBY_OPTS="--$MODE -J-Xmx400m -Xcext.enabled=true -J-XX:+UseCompressedOops -J-noverify"
+
+source $BIN_DIR/utils
 
 function download_and_install_jdk {
   curl --silent --location http://heroku-jvm-common.s3.amazonaws.com/jvm-buildpack-common.tar.gz | tar xz
@@ -40,10 +42,10 @@ function download_and_install_jdk {
     logger -p user.notice -t "slugc[$$]" "language_pack_java download_jdk"
     LOGGER_FLAGS="$LOGGER_FLAGS download_jdk"
     javaVersion=$(detect_java_version ${BUILD_DIR})
-    echo -n "-----> Installing OpenJDK ${javaVersion}..."
+    puts-step "Installing OpenJDK ${javaVersion}..."
     install_java ${BUILD_DIR} ${javaVersion}
     jdk_overlay ${BUILD_DIR}
-    echo "done"
+    echo "done" | indent
     cp ${BUILD_DIR}/system.properties ${CACHE_DIR}/
   fi
 }
@@ -51,20 +53,20 @@ function download_and_install_jdk {
 function download_jruby_and_install_default_gems {
   if [ ! -d "$CACHE_DIR/jruby-$VERSION" ]; then
     mkdir -p $CACHE_DIR
-    echo "-----> Deleting previous JRuby installations if any"
+    puts-step "Deleting previous JRuby installations if any"
     rm -rf $CACHE_DIR/jruby-*
     JRUBY_TAR=http://jruby.org.s3.amazonaws.com/downloads/$VERSION/jruby-bin-$VERSION.tar.gz
-    echo "-----> Downloading and unpacking JRuby"
+    puts-step "Downloading and unpacking JRuby"
     curl $JRUBY_TAR -s -o - | tar xzf - -C $CACHE_DIR/
     PATH=$CACHE_DIR/jruby-$VERSION/bin:$PATH
 
-    echo "-----> Installing JRuby-OpenSSL, Bundler and Rake"
+    puts-step "Installing JRuby-OpenSSL, Bundler and Rake"
     jruby $JRUBY_OPTS -S jgem install jruby-openssl bundler rake | indent
   fi
 }
 
 function copy_jruby_to_build {
-  echo "-----> Vendoring JRuby into slug"
+  puts-step "Vendoring JRuby into slug"
   cp -ru $CACHE_DIR/jruby-$VERSION $BUILD_DIR/jruby
   PATH=$BUILD_DIR/jruby/bin:$PATH
 }
@@ -83,7 +85,7 @@ function store_bundle_cache {
 }
 
 function bundle_install {
-  echo "-----> Installing dependencies with Bundler"
+  puts-step "Installing dependencies with Bundler"
 
   cd $BUILD_DIR
   jruby $JRUBY_OPTS -r openssl -S bundle install --without development:test --binstubs --deployment --clean | indent
@@ -121,7 +123,7 @@ function install_rails3_server_static_assets {
 }
 
 function create_database_yml {
-  echo "-----> Writing config/database.yml to read from DATABASE_URL"
+  puts-step "Writing config/database.yml to read from DATABASE_URL"
   mkdir -p $BUILD_DIR/config
   cat > $BUILD_DIR/config/database.yml << EOF
 <%
@@ -178,24 +180,17 @@ function precompile_assets {
   cd $BUILD_DIR
   if [ -f $BUILD_DIR/public/assets/manifest.yml ]
   then
-      echo "Detected manifest.yml, assuming assets were compiled locally"
+      echo "Detected manifest.yml, assuming assets were compiled locally" | indent
   else
       if ( jruby $JRUBY_OPTS -S bin/rake --dry-run --silent assets:precompile > /dev/null 2>&1 )
       then
-          echo "-----> Precompiling assets"
-          env DATABASE_URL=postgres://user:pass@127.0.0.1/dbname jruby $JRUBY_OPTS -S bin/rake assets:precompile 2>&1 | indent
+          puts-step "Precompiling assets"
+          jruby $JRUBY_OPTS -S bin/rake assets:precompile 2>&1 | indent
       else
-          echo "Precompile assets dry run failed!"
+          puts-warn "Precompile assets dry run failed!"
       fi
   fi
 }
-
-# Look for JRuby version in Gemfile
-VERSION=`grep ^ruby $BUILD_DIR/Gemfile | sed 's/.*version[^0-9]*\([0-9\.]*\).*/\1/'`
-# Try find preferred Ruby mode in the Gemfile
-MODE=`grep ^ruby $BUILD_DIR/Gemfile | cut -c 7-9`
-
-export JRUBY_OPTS="--$MODE -J-Xmx400m -Xcext.enabled=true -J-XX:+UseCompressedOops -J-noverify"
 
 download_and_install_jdk
 download_jruby_and_install_default_gems
@@ -204,6 +199,3 @@ bundle_install_with_cache
 
 create_database_yml
 precompile_assets
-
-# install_rails_log_stdout
-# install_rails3_server_static_assets
